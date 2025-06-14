@@ -1,41 +1,107 @@
-# Compiled Lua sources
-luac.out
+--[[
+Anti-Aimbot + Discord Webhook
+Detect aimlocks in head. Can be setable. 
+Author: yLuclfer.dev
+--]]
 
-# luarocks build files
-*.src.rock
-*.zip
-*.tar.gz
+local HttpService = game:GetService("HttpService")
+local Players = game:GetService("Players")
+local RunService = game:GetService("RunService")
+local LocalPlayer = Players.LocalPlayer
+local Camera = workspace.CurrentCamera
 
-# Object files
-*.o
-*.os
-*.ko
-*.obj
-*.elf
+--// CONFIG - Weeb hook if want
+local WEBHOOK_URL = "https://discord.com/api/webhooks/'Set you webhook'"
+local FOV_SNAP_THRESHOLD = 6
+local TRACK_DURATION_THRESHOLD = 2
+local TRACK_DISTANCE_TOLERANCE = 3
+local FLAG_SCORE_THRESHOLD = 5
 
-# Precompiled Headers
-*.gch
-*.pch
+--// INTERNS
+local lastTarget = nil
+local trackStartTime = 0
+local flagScore = 0
+local alertIssued = false
 
-# Libraries
-*.lib
-*.a
-*.la
-*.lo
-*.def
-*.exp
+--// discord logs if want
+local function sendToDiscord(title, description)
+	local data = {
+		["username"] = "Anticheat System",
+		["embeds"] = {{
+			["title"] = title,
+			["description"] = description,
+			["color"] = 16711680,
+			["footer"] = {
+				["text"] = "Anti-Aimbot"
+			},
+			["timestamp"] = DateTime.now():ToIsoDate()
+		}}
+	}
 
-# Shared objects (inc. Windows DLLs)
-*.dll
-*.so
-*.so.*
-*.dylib
+	local success, err = pcall(function()
+		HttpService:PostAsync(WEBHOOK_URL, HttpService:JSONEncode(data), Enum.HttpContentType.ApplicationJson)
+	end)
+	if not success then
+		warn("[WEBHOOK ERROR] "..tostring(err))
+	end
+end
 
-# Executables
-*.exe
-*.out
-*.app
-*.i*86
-*.x86_64
-*.hex
+--// Util: Angle to Target
+local function angleTo(part)
+	if not part then return math.huge end
+	local dir = (part.Position - Camera.CFrame.Position).Unit
+	local dot = Camera.CFrame.LookVector:Dot(dir)
+	return math.deg(math.acos(dot))
+end
 
+--// Util: Detect constant target
+local function getTargetedPlayer()
+	for _, plr in ipairs(Players:GetPlayers()) do
+		if plr ~= LocalPlayer and plr.Character and plr.Character:FindFirstChild("Head") then
+			local head = plr.Character.Head
+			local angle = angleTo(head)
+			local dist = (head.Position - Camera.CFrame.Position).Magnitude
+			if angle < FOV_SNAP_THRESHOLD and dist < 200 then
+				return plr, head, angle
+			end
+		end
+	end
+	return nil, nil, nil
+end
+
+--// Scanner
+RunService.RenderStepped:Connect(function()
+	local now = tick()
+	local target, head, angle = getTargetedPlayer()
+
+	if target then
+		if lastTarget == target then
+			if trackStartTime == 0 then
+				trackStartTime = now
+			elseif now - trackStartTime > TRACK_DURATION_THRESHOLD and angle < TRACK_DISTANCE_TOLERANCE then
+				if not alertIssued then
+					flagScore += 1
+					warn("⚠️ [AIMBOT SUSPECT] "..target.Name.." | Score: "..flagScore)
+
+					sendToDiscord("⚠️ Aimbot Suspect Detected",
+						"**User:** "..LocalPlayer.Name..
+						"\n**Locked Target:** "..target.Name..
+						"\n**Score:** "..flagScore..
+						"\n**Angle to Head:** "..math.floor(angle*100)/100.."°")
+
+					if flagScore >= FLAG_SCORE_THRESHOLD then
+						alertIssued = true
+						sendToDiscord("🚨 Aimbot Flag Triggered",
+							"**User:** "..LocalPlayer.Name.." reached **"..flagScore.." suspicious behaviors**.")
+					end
+				end
+			end
+		else
+			lastTarget = target
+			trackStartTime = now
+		end
+	else
+		lastTarget = nil
+		trackStartTime = 0
+	end
+end)
