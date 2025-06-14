@@ -1,52 +1,61 @@
---[[
-Anti-Aimbot + Discord Webhook
-Detect aimlocks in head. Can be setable..
-Author: yLuclfer.dev
---]]
-
+-- Script (ServerScriptService) look at README
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local HttpService = game:GetService("HttpService")
-local Players = game:GetService("Players")
-local RunService = game:GetService("RunService")
-local LocalPlayer = Players.LocalPlayer
-local Camera = workspace.CurrentCamera
 
---// CONFIG - Weeb hook if want
-local WEBHOOK_URL = "https://discord.com/api/webhooks/'Set you webhook'"
-local FOV_SNAP_THRESHOLD = 6
-local TRACK_DURATION_THRESHOLD = 2
-local TRACK_DISTANCE_TOLERANCE = 3
-local FLAG_SCORE_THRESHOLD = 5
+local Remote = ReplicatedStorage:WaitForChild("AntiCheatLog")
 
---// INTERNS
-local lastTarget = nil
-local trackStartTime = 0
-local flagScore = 0
-local alertIssued = false
+local WEBHOOK_URL = "https://discord.com/api/webhooks/SEU_WEBHOOK"
 
---// discord logs if want
 local function sendToDiscord(title, description)
 	local data = {
-		["username"] = "Anticheat System",
+		["username"] = "Anti-Cheat Monitor",
 		["embeds"] = {{
 			["title"] = title,
 			["description"] = description,
 			["color"] = 16711680,
-			["footer"] = {
-				["text"] = "Anti-Aimbot"
-			},
 			["timestamp"] = DateTime.now():ToIsoDate()
 		}}
 	}
-
-	local success, err = pcall(function()
+	pcall(function()
 		HttpService:PostAsync(WEBHOOK_URL, HttpService:JSONEncode(data), Enum.HttpContentType.ApplicationJson)
 	end)
-	if not success then
-		warn("[WEBHOOK ERROR] "..tostring(err))
-	end
 end
 
---// Util: Angle to Target
+Remote.OnServerEvent:Connect(function(player, flagType, data)
+	if flagType == "AimbotSuspect" and typeof(data) == "table" then
+		local msg = "**User:** " .. player.Name ..
+					"\n**Locked Target:** " .. data.target ..
+					"\n**Angle to Head:** " .. data.angle .. "°" ..
+					"\n**Score:** " .. tostring(data.score)
+
+		if data.score >= 5 then
+			sendToDiscord("🚨 Aimbot FLAGGED", msg)
+		else
+			sendToDiscord("⚠️ Aimbot SUSPECT", msg)
+		end
+	end
+end)
+
+--// Local Script
+
+-- LocalScript (StarterPlayerScripts)
+local Players = game:GetService("Players")
+local RunService = game:GetService("RunService")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+
+local LocalPlayer = Players.LocalPlayer
+local Camera = workspace.CurrentCamera
+local Remote = ReplicatedStorage:WaitForChild("AntiCheatLog")
+
+local FOV_SNAP_THRESHOLD = 6
+local TRACK_DURATION_THRESHOLD = 2
+local FLAG_SCORE_THRESHOLD = 5
+
+local lastTarget = nil
+local trackStart = 0
+local flagScore = 0
+local alertSent = false
+
 local function angleTo(part)
 	if not part then return math.huge end
 	local dir = (part.Position - Camera.CFrame.Position).Unit
@@ -54,54 +63,47 @@ local function angleTo(part)
 	return math.deg(math.acos(dot))
 end
 
---// Util: Detect constant target
-local function getTargetedPlayer()
+local function getTarget()
 	for _, plr in ipairs(Players:GetPlayers()) do
 		if plr ~= LocalPlayer and plr.Character and plr.Character:FindFirstChild("Head") then
 			local head = plr.Character.Head
 			local angle = angleTo(head)
 			local dist = (head.Position - Camera.CFrame.Position).Magnitude
 			if angle < FOV_SNAP_THRESHOLD and dist < 200 then
-				return plr, head, angle
+				return plr, angle
 			end
 		end
 	end
-	return nil, nil, nil
+	return nil, nil
 end
 
---// Scanner
 RunService.RenderStepped:Connect(function()
 	local now = tick()
-	local target, head, angle = getTargetedPlayer()
+	local target, angle = getTarget()
 
 	if target then
 		if lastTarget == target then
-			if trackStartTime == 0 then
-				trackStartTime = now
-			elseif now - trackStartTime > TRACK_DURATION_THRESHOLD and angle < TRACK_DISTANCE_TOLERANCE then
-				if not alertIssued then
-					flagScore += 1
-					warn("⚠️ [AIMBOT SUSPECT] "..target.Name.." | Score: "..flagScore)
-
-					sendToDiscord("⚠️ Aimbot Suspect Detected",
-						"**User:** "..LocalPlayer.Name..
-						"\n**Locked Target:** "..target.Name..
-						"\n**Score:** "..flagScore..
-						"\n**Angle to Head:** "..math.floor(angle*100)/100.."°")
-
+			if trackStart == 0 then
+				trackStart = now
+			elseif now - trackStart > TRACK_DURATION_THRESHOLD then
+				flagScore += 1
+				if not alertSent then
+					Remote:FireServer("AimbotSuspect", {
+						target = target.Name,
+						angle = math.floor(angle * 100) / 100,
+						score = flagScore
+					})
 					if flagScore >= FLAG_SCORE_THRESHOLD then
-						alertIssued = true
-						sendToDiscord("🚨 Aimbot Flag Triggered",
-							"**User:** "..LocalPlayer.Name.." reached **"..flagScore.." suspicious behaviors**.")
+						alertSent = true
 					end
 				end
 			end
 		else
 			lastTarget = target
-			trackStartTime = now
+			trackStart = now
 		end
 	else
 		lastTarget = nil
-		trackStartTime = 0
+		trackStart = 0
 	end
 end)
